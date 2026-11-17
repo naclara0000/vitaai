@@ -8,8 +8,8 @@ from base_dados import ALUNOS
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
 # RNF05: coloque a imagem da persona (gerada por IA) em AssAcad/vitaai.png
-IMG_PERSONA = os.path.join(PASTA, "vitaai.png")          # rosto (avatar do chat)
-IMG_CORPO = os.path.join(PASTA, "vitaai_corpo.png")      # corpo inteiro (barra lateral)
+IMG_PERSONA = os.path.join(PASTA, "vitaai.png")        
+IMG_CORPO = os.path.join(PASTA, "vitaai_corpo.png")  
 AVATARES = {
     "user": "🧑",
     "assistant": IMG_PERSONA if os.path.exists(IMG_PERSONA) else "💚",
