@@ -6,14 +6,12 @@ ALUNOS = {
     "1003": {"nome": "Ana Costa", "cpf": "33333333333", "plano": "Básico", "ativo": False},
 }
 
-# RN09: limite de reservas ativas por plano
 LIMITE_RESERVAS = {"Básico": 2, "Premium": 4}
 
-# Cancelamento só até X horas antes da aula (regra vigente da academia)
 CANCELAR_ATE_HORAS = 2
 
-# RN05: grade de aulas coletivas com limite de vagas
-# dia_semana: 0 = segunda ... 6 = domingo
+
+
 AULAS = [
     {"id": "spin-seg-07", "modalidade": "Spin", "dia": "Segunda", "dia_semana": 0, "hora": "07:00", "vagas": 10, "inscritos": ["9001", "9002"]},
     {"id": "spin-seg-19", "modalidade": "Spin", "dia": "Segunda", "dia_semana": 0, "hora": "19:00", "vagas": 10, "inscritos": []},
@@ -24,21 +22,21 @@ AULAS = [
     {"id": "spin-sab-09", "modalidade": "Spin", "dia": "Sábado", "dia_semana": 5, "hora": "09:00", "vagas": 10, "inscritos": []},
 ]
 
-# RN03: volume por nível (sugestão geral)
+
 SERIES = {
     "iniciante":     {"series": 2, "min": 2, "max": 3, "reps": "12 a 15", "descanso": "60 s"},
     "intermediario": {"series": 3, "min": 2, "max": 4, "reps": "10 a 12", "descanso": "60 a 90 s"},
     "avancado":      {"series": 4, "min": 3, "max": 5, "reps": "8 a 12", "descanso": "90 s"},
 }
 
-# Expresso: segundos de trabalho / descanso dentro de cada minuto do circuito
+
 EXPRESSO = {
     "iniciante": (30, 30),
     "intermediario": (40, 20),
     "avancado": (45, 15),
 }
 
-# RN04: modalidades de aquecimento por nível
+
 AQUECIMENTO = {
     "iniciante": [
         "Caminhada leve na esteira (5 min)",
@@ -57,7 +55,7 @@ AQUECIMENTO = {
     ],
 }
 
-# RF05: treino principal x secundário
+
 TREINOS = {
     "superiores": {
         "nome": "Superiores",
