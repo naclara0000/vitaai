@@ -1,9 +1,4 @@
-"""Cérebro da VitaAI: intenções, fluxos guiados e regras de negócio.
 
-responder(pergunta, estado) -> (texto, opcoes)
-  - texto: resposta em markdown
-  - opcoes: botões de resposta rápida (RNF07)
-"""
 import random
 import re
 import unicodedata
