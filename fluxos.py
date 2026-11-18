@@ -1,4 +1,9 @@
+"""Cérebro da VitaAI: intenções, fluxos guiados e regras de negócio.
 
+responder(pergunta, estado) -> (texto, opcoes)
+  - texto: resposta em markdown
+  - opcoes: botões de resposta rápida (RNF07)
+"""
 import random
 import re
 import unicodedata
@@ -13,10 +18,10 @@ from api_exercicios import buscar_exercicios
 
 try:
     from ia import conversar_ia
-except Exception:  # IA é opcional
+except Exception: 
     conversar_ia = None
 
-# ---------------------------------------------------------------- constantes
+
 MENU_OPCOES = [
     "Montar meu treino",
     "Agendar aula",
@@ -66,11 +71,11 @@ FOCO = [
 FOCO_ID = ["superiores", "inferiores", "corpo_todo"]
 DURACAO = [
     ("Treino completo", ["completo", "normal", "tenho tempo"]),
-    ("Expresso (20 min)", ["expresso", "rapido", "20", "pouco tempo", "curto"]),
+    ("Expresso (20 min)", ["expresso", "rapid", "20", "pouco tempo", "curto"]),
 ]
 
 
-# ---------------------------------------------------------------- utilitários
+
 def normalizar(texto):
     texto = unicodedata.normalize("NFD", texto.lower())
     return "".join(c for c in texto if unicodedata.category(c) != "Mn")
@@ -140,7 +145,7 @@ def _menu():
             "É só escrever ou tocar numa opção 💜"), MENU_OPCOES
 
 
-# ---------------------------------------------------------------- aulas
+
 def _aula(aula_id):
     return next(a for a in AULAS if a["id"] == aula_id)
 
@@ -231,7 +236,6 @@ PEDIR_ID = ("Para isso preciso validar seu cadastro. Me envie seu **número de m
             "ou CPF** (só números). Eu não deixo esse dado visível na conversa 🔒")
 
 
-# ---------------------------------------------------------------- fluxo: agendar
 def _iniciar_agendar(texto, estado):
     estado["fluxo"] = "agendar"
     estado["dados"] = {}
@@ -284,12 +288,12 @@ def _fluxo_agendar(texto, estado, agora):
             return "Tudo bem, não reservei nada.", ["Agendar aula", "Menu"]
         if palavras & {"sim", "confirmo", "confirmar", "pode", "ok", "isso"}:
             aula = _aula(d["aula"])
-            erro = _validar_regras(estado, aula)  # revalida (vaga pode ter acabado)
+            erro = _validar_regras(estado, aula)  
             if erro:
                 _limpar_fluxo(estado)
                 return erro, ["Agendar aula", "Menu"]
             estado["reservas"][aula["id"]].append(estado["aluno"])
-            # RN07: só confirma quando o registro aparece no sistema
+   
             if estado["aluno"] in estado["reservas"][aula["id"]]:
                 _limpar_fluxo(estado)
                 protocolo = f"VIT-{aula['id'].upper()}-{estado['aluno']}"
@@ -302,7 +306,7 @@ def _fluxo_agendar(texto, estado, agora):
         return "Responda **sim** para confirmar ou **não** para desistir.", ["Sim, confirmar", "Não"]
 
 
-# ---------------------------------------------------------------- fluxo: cancelar / ver reservas
+
 def _iniciar_cancelar(estado, so_ver=False):
     estado["fluxo"] = "cancelar"
     estado["dados"] = {"so_ver": so_ver}
@@ -364,7 +368,6 @@ def _fluxo_cancelar(texto, estado, agora):
         return "Responda **sim** para cancelar ou **não** para manter.", ["Sim, cancelar", "Não"]
 
 
-# ---------------------------------------------------------------- fluxo: nível
 def _iniciar_nivel(estado, depois=None, pre=None):
     estado["fluxo"] = "nivel"
     estado["etapa"] = "tempo"
@@ -419,7 +422,46 @@ def _fluxo_nivel(texto, estado, agora):
         return _concluir_nivel(estado, agora)
 
 
-# ---------------------------------------------------------------- fluxo: treino
+
+def _iniciar_serie(texto, estado):
+    foco = escolher(texto, FOCO, numerico=False)
+    pre = {
+        "foco": 2 if foco is None else foco,  # "série de condicionamento" = corpo todo
+        "express": True if tem(texto, ["expresso", "rapid", "20 min", "pouco tempo"]) else None,
+    }
+    estado["fluxo"] = "serie"
+    estado["etapa"] = "aquecimento"
+    estado["dados"] = {"pre": pre}
+    return "Posso ajudar! Você deseja começar com aquecimento?", ["Sim", "Não"]
+
+
+def _seguir_serie(estado, prefixo):
+    pre = estado["dados"]["pre"]
+    nome = ALUNOS[estado["aluno"]]["nome"].split()[0]
+    resp, ops = _iniciar_treino(estado, pre)
+    return f"{prefixo}Cadastro validado, {nome}! ✅\n\n" + resp, ops
+
+
+def _fluxo_serie(texto, estado, agora):
+    palavras = set(re.findall(r"\w+", texto))
+    if estado["etapa"] == "aquecimento":
+        if palavras & {"sim", "quero", "claro", "pode", "vamos", "ok"}:
+            prefixo = ""
+        elif palavras & {"nao", "dispenso"}:
+            prefixo = ("Tudo bem! Mesmo assim vou deixar a sugestão no seu treino, "
+                       "porque aquecer previne lesões. ")
+        else:
+            return "Responda **sim** ou **não**: você deseja começar com aquecimento?", ["Sim", "Não"]
+        if estado["aluno"]:
+            return _seguir_serie(estado, prefixo)
+        estado["etapa"] = "id"
+        return prefixo + "Informe seu número de matrícula para prosseguir.", []
+    if estado["etapa"] == "id":
+        ok, resp = _validar_id(texto, estado)
+        return _seguir_serie(estado, "") if ok else resp
+
+
+
 def _iniciar_treino(estado, pre):
     if estado["nivel"] is None:
         resp, ops = _iniciar_nivel(estado, depois="treino", pre=pre)
@@ -515,7 +557,7 @@ def _ajustar_treino(texto, estado):
         estado["ajuste"] -= 1
         return _texto_treino(estado)
     if escolher(texto, FOCO, numerico=False) is None:
-        if tem(texto, ["expresso", "rapido"]) and not express:
+        if tem(texto, ["expresso", "rapid"]) and not express:
             estado["ultimo_treino"] = (foco_i, True)
             return _texto_treino(estado)
         if "treino completo" in texto and express:
@@ -534,8 +576,6 @@ def _texto_aquecimento(estado):
     return ("Algumas opções de aquecimento:\n\n" + itens +
             "\n\nSe me disser seu nível, eu adapto a recomendação."), ["Descobrir meu nível", "Montar meu treino"]
 
-
-# ---------------------------------------------------------------- informações (UC01)
 def _lista_modalidades():
     mods = list(academia["modalidades"])
     for a in AULAS:
@@ -581,7 +621,6 @@ def _info(texto, palavras, estado):
     return None
 
 
-# ---------------------------------------------------------------- exercícios (API)
 def _exercicios_api(texto):
     categorias = []
     for palavra, ids in CATEGORIAS.items():
@@ -601,12 +640,13 @@ def _exercicios_api(texto):
             "\n\nPeça a um instrutor para ajustar séries e cargas 💪"), ["Montar meu treino", "Menu"]
 
 
-# ---------------------------------------------------------------- roteador principal
+
 FLUXOS = {
     "agendar": _fluxo_agendar,
     "cancelar": _fluxo_cancelar,
     "nivel": _fluxo_nivel,
     "treino": _fluxo_treino,
+    "serie": _fluxo_serie,
 }
 
 
@@ -615,7 +655,7 @@ def responder(pergunta, estado, agora=None):
     texto = normalizar(pergunta)
     palavras = set(re.findall(r"\w+", texto))
 
-    # Dentro de um fluxo guiado
+ 
     if estado["fluxo"]:
         if tem(texto, ["recepcao", "atendente", "humano"]):
             _limpar_fluxo(estado)
@@ -631,7 +671,7 @@ def responder(pergunta, estado, agora=None):
         estado["falhas"] = 0
         return resp
 
-    # Não entendeu: IA opcional, depois redirecionamento (RF09)
+   
     estado["falhas"] += 1
     if conversar_ia:
         r = conversar_ia(pergunta, _contexto_ia())
@@ -648,7 +688,6 @@ def responder(pergunta, estado, agora=None):
 
 
 def _rotear(pergunta, texto, palavras, estado, agora):
-    # 0. Conversa social (mensagens curtas)
     if len(palavras) <= 4:
         if palavras & {"oi", "ola", "opa", "eae", "hey"} or tem(texto, ["bom dia", "boa tarde", "boa noite"]):
             return variar(
@@ -660,16 +699,16 @@ def _rotear(pergunta, texto, palavras, estado, agora):
         if palavras & {"menu", "ajuda"} or tem(texto, ["o que voce faz", "o que voce pode"]):
             return _menu()
 
-    # 1. Atendimento humano (RF09)
+  
     if tem(texto, ["recepcao", "atendente", "humano", "falar com", "professor", "telefone"]):
         return _recepcao()
 
-    # 2. Ajustes no último treino
+ 
     r = _ajustar_treino(texto, estado)
     if r:
         return r
 
-    # 3. Reservas
+  
     if tem(texto, ["minhas reserva", "minha reserva", "meus agendamentos", "ver reserva"]):
         return _iniciar_cancelar(estado, so_ver=True)
     if tem(texto, ["cancel", "desmarcar"]):
@@ -677,8 +716,12 @@ def _rotear(pergunta, texto, palavras, estado, agora):
     if tem(texto, ["agend", "marcar", "reservar", "inscrever"]):
         return _iniciar_agendar(texto, estado)
 
-    # 4. Nível (RF03)
-    if tem(texto, ["nivel", "condicionamento", "classific", "avaliacao", "avaliar"]):
+   
+    if "serie" in texto and not palavras & {"mais", "menos", "aumentar", "diminuir", "reduzir"}:
+        return _iniciar_serie(texto, estado)
+
+    
+    if tem(texto, ["nivel", "classific", "avaliacao", "avaliar"]):
         if estado["nivel"] and not tem(texto, ["refaz", "novamente", "reclass", "de novo", "avaliacao"]):
             return (f"Seu nível atual é **{NOMES_NIVEL[estado['nivel']]}**.",
                     ["Refazer avaliação", "Montar meu treino"])
@@ -686,22 +729,22 @@ def _rotear(pergunta, texto, palavras, estado, agora):
     if tem(texto, ["descobrir meu nivel"]):
         return _iniciar_nivel(estado)
 
-    # 5. Aquecimento (RF04) e treino (RF05, RF06)
+  
     if tem(texto, ["aquecimento", "aquecer"]):
         return _texto_aquecimento(estado)
     if tem(texto, ["treino", "ficha", "malhar", "treinar"]):
         pre = {}
         i = escolher(texto, FOCO, numerico=False)
         pre["foco"] = i
-        pre["express"] = (True if tem(texto, ["expresso", "rapido", "20 min", "pouco tempo"]) else None)
+        pre["express"] = (True if tem(texto, ["expresso", "rapid", "20 min", "pouco tempo"]) else None)
         return _iniciar_treino(estado, pre)
 
-    # 6. Informações da academia (RF07)
+  
     r = _info(texto, palavras, estado)
     if r:
         return r
 
-    # 7. Exercícios pela API
+   
     if "exercicio" in texto or any(p in texto for p in CATEGORIAS):
         return _exercicios_api(texto)
 
