@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 
 from informacoes import academia
 from base_dados import (
-    ALUNOS, AULAS, LIMITE_RESERVAS, CANCELAR_ATE_HORAS,
-    SERIES, EXPRESSO, AQUECIMENTO, TREINOS,
+    ALUNOS, GRADE, LIMITE_RESERVAS, CANCELAR_ATE_HORAS, SERIES, AQUECIMENTO,
+    TREINOS, EXECUCAO, CHAVES_EXERCICIO, EXPRESSO,
 )
 from api_exercicios import buscar_exercicios
 
@@ -20,7 +20,6 @@ try:
     from ia import conversar_ia
 except Exception: 
     conversar_ia = None
-
 
 MENU_OPCOES = [
     "Montar meu treino",
@@ -31,6 +30,7 @@ MENU_OPCOES = [
 ]
 
 NOMES_NIVEL = {"iniciante": "Iniciante", "intermediario": "Intermediário", "avancado": "Avançado"}
+NIVEL_MIN = {"iniciante": "iniciante", "intermediario": "intermediário", "avancado": "avançado"}
 
 CATEGORIAS = {
     "superior": [11, 12, 13, 8], "inferior": [9, 14],
@@ -41,39 +41,26 @@ CATEGORIAS = {
     "peito": [11], "costas": [12], "ombro": [13], "cardio": [15],
 }
 
-# Perguntas do fluxo de nível: (rótulo do botão, palavras-chave aceitas)
-TEMPO = [
-    ("Nunca pratiquei", ["nunca", "nao pratico", "zero", "comecando", "iniciando"]),
-    ("Menos de 6 meses", ["menos de 6", "poucos meses", "alguns meses"]),
-    ("De 6 meses a 2 anos", ["6 meses", "1 ano", "um ano", "2 anos", "dois anos"]),
-    ("Mais de 2 anos", ["mais de 2", "anos", "bastante"]),
-]
-FREQ = [
-    ("1 a 2 vezes", ["1", "2", "uma", "duas"]),
-    ("3 a 4 vezes", ["3", "4", "tres", "quatro"]),
-    ("5 ou mais vezes", ["5", "6", "7", "cinco", "todo dia"]),
-]
-OBJETIVO = [
-    ("Emagrecer", ["emagrec", "perder peso", "secar"]),
-    ("Ganhar massa", ["massa", "hipertrofia", "ganhar", "crescer"]),
-    ("Condicionamento", ["condicion", "resistencia", "folego"]),
-    ("Saúde e bem-estar", ["saude", "bem", "qualidade"]),
-]
-LESAO = [
-    ("Não tenho", ["nao", "nenhum", "nada"]),
-    ("Tenho lesão ou restrição", ["sim", "tenho", "lesao", "dor", "restri"]),
-]
 FOCO = [
     ("Superiores", ["superior", "parte de cima", "peito", "costas", "ombro", "braco"]),
     ("Inferiores", ["inferior", "perna", "gluteo", "coxa", "panturrilha"]),
     ("Corpo todo", ["corpo todo", "full body", "geral"]),
 ]
 FOCO_ID = ["superiores", "inferiores", "corpo_todo"]
-DURACAO = [
-    ("Treino completo", ["completo", "normal", "tenho tempo"]),
-    ("Expresso (20 min)", ["expresso", "rapid", "20", "pouco tempo", "curto"]),
-]
+FOCO_PADRAO = 1
 
+TEMPO_OPCOES = ["Nunca treinei", "Mais de 6 meses parado", "Menos de 6 meses parado", "Treino regularmente"]
+OBJETIVO_OPCOES = ["Ganhar massa", "Emagrecer", "Melhorar o fôlego", "Saúde e bem-estar"]
+
+DIAS = ["segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"]
+NOMES_DIA = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+             "sexta-feira", "sábado", "domingo"]
+
+NUMEROS = {"um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "quatro": 4, "cinco": 5,
+           "seis": 6, "sete": 7, "oito": 8, "nove": 9, "dez": 10, "onze": 11, "doze": 12}
+UNIDADES = {"semana": 0.25, "semanas": 0.25, "mes": 1, "meses": 1, "ano": 12, "anos": 12}
+
+EXPRESSO_PALAVRAS = ["20 min", "corrido", "pouco tempo", "expresso", "rapid", "so tenho"]
 
 
 def normalizar(texto):
@@ -89,17 +76,12 @@ def variar(*opcoes):
     return random.choice(opcoes)
 
 
-def rotulos(opcoes):
-    return [o[0] for o in opcoes]
-
-
 def mascarar(texto):
     """RNF08/09: esconde números longos (CPF, matrícula) no histórico exibido."""
     return re.sub(r"\d[\d.\-/]{2,}\d", "•••", texto)
 
 
 def escolher(texto, opcoes, numerico=True):
-    """Devolve o índice da opção que combina com o texto (ou None)."""
     t = texto.strip()
     if numerico and t.isdigit() and 1 <= int(t) <= len(opcoes):
         return int(t) - 1
@@ -112,12 +94,19 @@ def escolher(texto, opcoes, numerico=True):
     return None
 
 
+def _frase_lista(itens):
+    if len(itens) <= 1:
+        return "".join(itens)
+    return ", ".join(itens[:-1]) + " e " + itens[-1]
+
+
 def novo_estado():
     return {
         "fluxo": None, "etapa": None, "dados": {},
         "nivel": None, "perfil": {}, "aluno": None,
-        "reservas": {a["id"]: list(a["inscritos"]) for a in AULAS},
-        "ultimo_treino": None, "ajuste": 0, "falhas": 0,
+        "reservas": {}, "slots": {},
+        "ultimo_treino": None, "ajuste": 0, "aquecido": False,
+        "foco_pref": None, "aguardando": None, "falhas": 0,
     }
 
 
@@ -138,68 +127,147 @@ def _recepcao():
 
 def _menu():
     return ("Posso te ajudar com:\n\n"
-            "- Montar seu treino (com aquecimento e séries)\n"
+            "- Descobrir seu nível e montar seu treino\n"
+            "- Indicar o aquecimento e uma série expressa\n"
             "- Agendar ou cancelar aulas coletivas\n"
-            "- Horários, planos, modalidades e endereço\n"
-            "- Sugestões de exercícios\n\n"
+            "- Horários, planos, modalidades e endereço\n\n"
             "É só escrever ou tocar numa opção 💜"), MENU_OPCOES
 
 
+def _parse_data(texto, agora):
+    hoje = agora.date()
+    if "depois de amanha" in texto:
+        return hoje + timedelta(days=2)
+    if "amanha" in texto:
+        return hoje + timedelta(days=1)
+    if "hoje" in texto:
+        return hoje
+    for i, d in enumerate(DIAS):
+        if d in texto:
+            return hoje + timedelta(days=(i - agora.weekday()) % 7)
+    m = re.search(r"(\d{1,2})/(\d{1,2})", texto)
+    if m:
+        try:
+            return hoje.replace(month=int(m.group(2)), day=int(m.group(1)))
+        except ValueError:
+            return None
+    return None
 
-def _aula(aula_id):
-    return next(a for a in AULAS if a["id"] == aula_id)
+
+def _parse_hora(texto):
+    m = re.search(r"(\d{1,2})\s*[:h]\s*(\d{2})", texto)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.search(r"\b(\d{1,2})\s*(?:h|horas?)?\b", texto)
+    if m:
+        return int(m.group(1)), None
+    return None
 
 
-def _rotulo_aula(a):
-    return f"{a['modalidade']} {a['dia']} {a['hora']}"
+def _dia_rel(data, agora):
+    delta = (data - agora.date()).days
+    if delta == 0:
+        return "hoje"
+    if delta == 1:
+        return "amanhã"
+    return f"{NOMES_DIA[data.weekday()]} ({data:%d/%m})"
 
 
-def _vagas(estado, a):
-    return a["vagas"] - len(estado["reservas"][a["id"]])
+def _dt(slot):
+    h, m = map(int, slot["hora"].split(":"))
+    d = slot["data"]
+    return datetime(d.year, d.month, d.day, h, m)
 
 
-def _reservas_do_aluno(estado):
+def _slot(estado, g, data, hora):
+    key = f"{g['modalidade']}|{data.isoformat()}|{hora}"
+    if key not in estado["reservas"]:
+        n = g["ocupadas"].get(hora, 0)
+        estado["reservas"][key] = [f"9{i:04d}" for i in range(n)]  # outros alunos
+    estado["slots"][key] = {"key": key, "modalidade": g["modalidade"], "data": data,
+                            "hora": hora, "vagas": g["vagas"]}
+    return estado["slots"][key]
+
+
+def _slots_do_dia(estado, data, modalidade, agora):
+    out = []
+    for g in GRADE:
+        if modalidade and g["modalidade"] != modalidade:
+            continue
+        if data.weekday() not in g["dias"]:
+            continue
+        for hora in g["horas"]:
+            s = _slot(estado, g, data, hora)
+            if _dt(s) > agora:
+                out.append(s)
+    return out
+
+
+def _vagas(estado, slot):
+    return slot["vagas"] - len(estado["reservas"][slot["key"]])
+
+
+def _reservas_do_aluno(estado, agora):
     mat = estado["aluno"]
-    return [a for a in AULAS if mat in estado["reservas"][a["id"]]]
+    res = [s for k, s in estado["slots"].items()
+           if mat in estado["reservas"].get(k, []) and _dt(s) > agora]
+    return sorted(res, key=_dt)
 
 
-def _achar_aula(texto, aulas):
-    if texto.strip().isdigit():
-        i = int(texto.strip())
-        if 1 <= i <= len(aulas):
-            return aulas[i - 1]
-    nums = {int(n) for n in re.findall(r"\d+", texto)}
-    cands = [a for a in aulas if normalizar(a["dia"]) in texto and int(a["hora"][:2]) in nums]
-    if len(cands) > 1:
-        cands = [a for a in cands if normalizar(a["modalidade"]) in texto] or cands
+def _rotulo(slot, agora):
+    return f"{slot['modalidade']} {_dia_rel(slot['data'], agora)} às {slot['hora']}"
+
+
+def _rotulo_curto(slot):
+    return f"{slot['modalidade']} {slot['data']:%d/%m} {slot['hora']}"
+
+
+def _periodo(hora):
+    h = int(hora[:2])
+    return "Manhã" if h < 12 else ("Tarde" if h < 18 else "Noite")
+
+
+def _linhas_periodos(slots):
+    grupos = {}
+    for s in slots:
+        grupos.setdefault(_periodo(s["hora"]), []).append(s["hora"])
+    return [f"- {p}: {_frase_lista(grupos[p])}" for p in ("Manhã", "Tarde", "Noite") if p in grupos]
+
+
+def _achar_slot(texto, slots, agora, exigir_hora=False):
+    if texto.strip().isdigit() and 1 <= int(texto.strip()) <= len(slots):
+        return slots[int(texto.strip()) - 1]
+    hr = _parse_hora(texto)
+    data = _parse_data(texto, agora)
+    if hr is None and (exigir_hora or data is None):
+        return None
+    cands = list(slots)
+    if hr:
+        cands = [s for s in cands if int(s["hora"][:2]) == hr[0]
+                 and (hr[1] is None or int(s["hora"][3:]) == hr[1])]
+    if data:
+        cands = [s for s in cands if s["data"] == data]
+    por_mod = [s for s in cands if normalizar(s["modalidade"]) in texto]
+    cands = por_mod or cands
     return cands[0] if cands else None
 
 
-def _proxima_ocorrencia(aula, agora):
-    h, m = map(int, aula["hora"].split(":"))
-    dias = (aula["dia_semana"] - agora.weekday()) % 7
-    dt = agora.replace(hour=h, minute=m, second=0, microsecond=0) + timedelta(days=dias)
-    if dt <= agora:
-        dt += timedelta(days=7)
-    return dt
-
-
-def _validar_regras(estado, aula):
-    """RN05, RN08 e RN09. Devolve mensagem de erro ou None."""
+def _validar_regras(estado, slot, agora):
+    """RN05, RN08 e RN09. Devolve (tipo, mensagem) ou None."""
     mat = estado["aluno"]
-    if _vagas(estado, aula) <= 0:
-        return f"A aula **{_rotulo_aula(aula)}** está lotada 😕"
-    if mat in estado["reservas"][aula["id"]]:
-        return f"Você já tem reserva em **{_rotulo_aula(aula)}**."
-    for outra in _reservas_do_aluno(estado):
-        if outra["dia_semana"] == aula["dia_semana"] and outra["hora"] == aula["hora"]:
-            return (f"Esse horário conflita com sua reserva em "
-                    f"**{_rotulo_aula(outra)}**.")
+    if _vagas(estado, slot) <= 0:
+        return "vagas", f"A aula **{_rotulo(slot, agora)}** está lotada 😕"
+    if mat in estado["reservas"][slot["key"]]:
+        return "dup", f"Você já tem reserva em **{_rotulo(slot, agora)}**."
+    ativas = _reservas_do_aluno(estado, agora)
+    for o in ativas:
+        if o["data"] == slot["data"] and o["hora"] == slot["hora"]:
+            return "conflito", f"Esse horário conflita com sua reserva em **{_rotulo(o, agora)}**."
     plano = ALUNOS[mat]["plano"]
     limite = LIMITE_RESERVAS[plano]
-    if len(_reservas_do_aluno(estado)) >= limite:
-        return (f"Seu plano {plano} permite até **{limite}** reservas ao mesmo tempo, "
-                "e você já atingiu o limite. Cancele uma reserva para agendar outra.")
+    if len(ativas) >= limite:
+        return "limite", (f"Seu plano {plano} permite até **{limite}** reservas ao mesmo tempo, "
+                          "e você já atingiu o limite. Cancele uma reserva para agendar outra.")
     return None
 
 
@@ -220,14 +288,14 @@ def _validar_id(texto, estado):
         d["tentativas"] = d.get("tentativas", 0) + 1
         if d["tentativas"] >= 3:
             _limpar_fluxo(estado)
-            tel = academia["recepcao_telefone"]
-            return False, (f"Não consegui validar seu cadastro. Fale com a recepção pelo {tel} 😊", [])
+            return False, (f"Não consegui validar seu cadastro. Fale com a recepção pelo "
+                           f"{academia['recepcao_telefone']} 😊", [])
         return False, ("Não encontrei esse número no cadastro. Confira e envie de novo "
                        "(matrícula ou CPF, só números).", ["Falar com a recepção"])
     if not ALUNOS[mat]["ativo"]:
         _limpar_fluxo(estado)
-        tel = academia["recepcao_telefone"]
-        return False, (f"Seu cadastro consta como **inativo**. A recepção resolve isso pra você: {tel}.", [])
+        return False, (f"Seu cadastro consta como **inativo**. A recepção resolve isso pra você: "
+                       f"{academia['recepcao_telefone']}.", [])
     estado["aluno"] = mat
     return True, None
 
@@ -236,351 +304,485 @@ PEDIR_ID = ("Para isso preciso validar seu cadastro. Me envie seu **número de m
             "ou CPF** (só números). Eu não deixo esse dado visível na conversa 🔒")
 
 
-def _iniciar_agendar(texto, estado):
+def _iniciar_agendar(texto, estado, agora):
+    d = {"filtro": None, "data": _parse_data(texto, agora)}
+    for g in GRADE:
+        if normalizar(g["modalidade"]) in texto:
+            d["filtro"] = g["modalidade"]
     estado["fluxo"] = "agendar"
-    estado["dados"] = {}
-    for m in {a["modalidade"] for a in AULAS}:
-        if normalizar(m) in texto:
-            estado["dados"]["filtro"] = m
-    if estado["aluno"]:
-        return _mostrar_aulas(estado)
-    estado["etapa"] = "id"
-    return PEDIR_ID, []
+    estado["dados"] = d
+    if d["data"] is None:
+        estado["etapa"] = "dia"
+        return ("Para qual dia você quer agendar? Posso ver hoje, amanhã ou um dia da semana.",
+                ["Hoje", "Amanhã"])
+    return _mostrar_slots(estado, agora)
 
 
-def _mostrar_aulas(estado):
+def _mostrar_slots(estado, agora, prefixo=""):
     d = estado["dados"]
-    aulas = [a for a in AULAS if not d.get("filtro") or a["modalidade"] == d["filtro"]]
-    linhas, botoes = [], []
-    for i, a in enumerate(aulas, 1):
-        v = _vagas(estado, a)
-        linhas.append(f"{i}. {_rotulo_aula(a)} — {f'{v} vaga(s)' if v > 0 else 'lotada'}")
-        if v > 0:
-            botoes.append(_rotulo_aula(a))
-    d["lista"] = [a["id"] for a in aulas]
+    pedido = d["data"]
+    slots, dia = [], pedido
+    for i in range(8):
+        dia = pedido + timedelta(days=i)
+        slots = [s for s in _slots_do_dia(estado, dia, d["filtro"], agora) if _vagas(estado, s) > 0]
+        if slots:
+            break
+    if not slots:
+        filtro = d["filtro"]
+        _limpar_fluxo(estado)
+        quais = f"As aulas de {filtro} estão lotadas" if filtro else "Não há horários vagos"
+        return (f"{quais} nos próximos dias 😕 Fale com a recepção para entrar na lista de "
+                f"espera: {academia['recepcao_telefone']}."), []
+    d["data"] = dia
+    aviso = ""
+    if dia != pedido:
+        aviso = (f"Não encontrei horários vagos para {_dia_rel(pedido, agora)}. "
+                 f"Os próximos são para {_dia_rel(dia, agora)}.\n\n")
+    rel = _dia_rel(dia, agora)
+    intro = "" if prefixo else "Posso realizar o agendamento para você agora mesmo! "
+    mods = list(dict.fromkeys(s["modalidade"] for s in slots))
+    if len(mods) == 1:
+        corpo = (f"{intro}Para {rel}, temos os seguintes horários vagos na aula de {mods[0]}:\n\n"
+                 + "\n".join(_linhas_periodos(slots)))
+        botoes = [s["hora"] for s in slots]
+    else:
+        partes = []
+        for m in mods:
+            sm = [s for s in slots if s["modalidade"] == m]
+            partes.append(f"**{m}**\n" + "\n".join(_linhas_periodos(sm)))
+        corpo = f"{intro}Para {rel}, temos os seguintes horários vagos:\n\n" + "\n\n".join(partes)
+        botoes = [f"{s['modalidade']} {s['hora']}" for s in slots]
+    d["slots"] = [s["key"] for s in slots]
     d["botoes"] = botoes
-    estado["etapa"] = "aula"
-    nome = ALUNOS[estado["aluno"]]["nome"].split()[0]
-    return (f"Cadastro validado, {nome}! ✅ Estas são as aulas coletivas:\n\n" + "\n".join(linhas)
-            + "\n\nQual você quer reservar?"), botoes
+    estado["etapa"] = "hora"
+    return prefixo + aviso + corpo + "\n\nQual horário prefere reservar?", botoes
+
+
+def _confirmar_reserva(estado, agora, validou_agora):
+    d = estado["dados"]
+    slot = estado["slots"][d["escolhido"]]
+    erro = _validar_regras(estado, slot, agora)
+    if erro:
+        tipo, msg = erro
+        if tipo == "limite":
+            _limpar_fluxo(estado)
+            return msg, ["Cancelar uma reserva", "Menu"]
+        return _mostrar_slots(estado, agora, prefixo=msg + "\n\nEscolha outro horário.\n\n")
+    estado["reservas"][slot["key"]].append(estado["aluno"])
+    # RN07: só confirma quando o registro aparece no sistema
+    if estado["aluno"] in estado["reservas"][slot["key"]]:
+        _limpar_fluxo(estado)
+        protocolo = (f"VIT-{slot['modalidade'][:3].upper()}-{slot['data']:%d%m}-"
+                     f"{slot['hora'].replace(':', '')}-{estado['aluno']}")
+        prefixo = "Matrícula validada! " if validou_agora else ""
+        return (f"{prefixo}Sua vaga na aula de {slot['modalidade']} de "
+                f"{_dia_rel(slot['data'], agora)} às {slot['hora']} está confirmada. 🎉\n\n"
+                f"Comprovante da reserva: `{protocolo}`\n\nPosso te ajudar em algo mais?"), \
+            ["Minhas reservas", "Montar meu treino", "Não, obrigado"]
+    _limpar_fluxo(estado)
+    return "Não consegui registrar a reserva no sistema. Tente de novo ou fale com a recepção.", []
 
 
 def _fluxo_agendar(texto, estado, agora):
-    d = estado["dados"]
-    etapa = estado["etapa"]
+    d, etapa = estado["dados"], estado["etapa"]
+    if etapa == "dia":
+        data = _parse_data(texto, agora)
+        if data is None:
+            return "Não entendi o dia 😅 Escolha uma opção ou diga, por exemplo, \"sexta\".", ["Hoje", "Amanhã"]
+        d["data"] = data
+        return _mostrar_slots(estado, agora)
+    if etapa == "hora":
+        slot = _achar_slot(texto, [estado["slots"][k] for k in d["slots"]], agora, exigir_hora=True)
+        if slot is None:
+            return "Não identifiquei o horário 😅 Toque numa opção ou diga a hora.", d["botoes"]
+        d["escolhido"] = slot["key"]
+        if estado["aluno"]:
+            return _confirmar_reserva(estado, agora, validou_agora=False)
+        estado["etapa"] = "id"
+        return "Para confirmar a reserva, por favor me informe o seu número de matrícula ou CPF.", []
     if etapa == "id":
         ok, resp = _validar_id(texto, estado)
-        return _mostrar_aulas(estado) if ok else resp
-    if etapa == "aula":
-        aula = _achar_aula(texto, [_aula(i) for i in d["lista"]])
-        if aula is None:
-            return "Não identifiquei a aula 😅 Toque numa opção ou diga o dia e a hora.", d["botoes"]
-        erro = _validar_regras(estado, aula)
-        if erro:
-            return erro + "\n\nEscolha outro horário:", d["botoes"]
-        d["aula"] = aula["id"]
-        estado["etapa"] = "confirma"
-        return f"Posso confirmar a reserva em **{_rotulo_aula(aula)}**?", ["Sim, confirmar", "Não"]
-    if etapa == "confirma":
-        palavras = set(re.findall(r"\w+", texto))
-        if palavras & {"nao", "cancela", "desisto"}:
-            _limpar_fluxo(estado)
-            return "Tudo bem, não reservei nada.", ["Agendar aula", "Menu"]
-        if palavras & {"sim", "confirmo", "confirmar", "pode", "ok", "isso"}:
-            aula = _aula(d["aula"])
-            erro = _validar_regras(estado, aula)  
-            if erro:
-                _limpar_fluxo(estado)
-                return erro, ["Agendar aula", "Menu"]
-            estado["reservas"][aula["id"]].append(estado["aluno"])
-   
-            if estado["aluno"] in estado["reservas"][aula["id"]]:
-                _limpar_fluxo(estado)
-                protocolo = f"VIT-{aula['id'].upper()}-{estado['aluno']}"
-                return (f"Reserva confirmada! 🎉 **{_rotulo_aula(aula)}**\n\n"
-                        f"Protocolo: `{protocolo}`\n\nChegue 10 minutos antes. "
-                        f"Cancelamentos até {CANCELAR_ATE_HORAS} h antes da aula."), \
-                    ["Minhas reservas", "Montar meu treino", "Menu"]
-            _limpar_fluxo(estado)
-            return "Não consegui registrar a reserva no sistema. Tente de novo ou fale com a recepção.", []
-        return "Responda **sim** para confirmar ou **não** para desistir.", ["Sim, confirmar", "Não"]
+        return _confirmar_reserva(estado, agora, validou_agora=True) if ok else resp
 
 
-
-def _iniciar_cancelar(estado, so_ver=False):
+def _iniciar_cancelar(estado, agora, so_ver=False):
     estado["fluxo"] = "cancelar"
     estado["dados"] = {"so_ver": so_ver}
     if estado["aluno"]:
-        return _mostrar_reservas(estado, datetime.now())
+        return _mostrar_reservas(estado, agora)
     estado["etapa"] = "id"
     return PEDIR_ID, []
 
 
 def _mostrar_reservas(estado, agora):
     d = estado["dados"]
-    reservas = _reservas_do_aluno(estado)
-    if not reservas:
+    res = _reservas_do_aluno(estado, agora)
+    if not res:
         _limpar_fluxo(estado)
         return "Você não tem nenhuma reserva no momento.", ["Agendar aula", "Menu"]
-    linhas = [f"{i}. {_rotulo_aula(a)}" for i, a in enumerate(reservas, 1)]
+    linhas = [f"{i}. {_rotulo(s, agora)}" for i, s in enumerate(res, 1)]
     if d.get("so_ver"):
         _limpar_fluxo(estado)
         return "Suas reservas:\n\n" + "\n".join(linhas), ["Agendar aula", "Cancelar uma reserva", "Menu"]
-    d["lista"] = [a["id"] for a in reservas]
-    d["botoes"] = [_rotulo_aula(a) for a in reservas]
+    d["lista"] = [s["key"] for s in res]
+    d["botoes"] = [_rotulo_curto(s) for s in res]
     estado["etapa"] = "escolha"
     return "Suas reservas:\n\n" + "\n".join(linhas) + "\n\nQual você quer cancelar?", d["botoes"]
 
 
 def _fluxo_cancelar(texto, estado, agora):
-    d = estado["dados"]
-    etapa = estado["etapa"]
+    d, etapa = estado["dados"], estado["etapa"]
     if etapa == "id":
         ok, resp = _validar_id(texto, estado)
         return _mostrar_reservas(estado, agora) if ok else resp
     if etapa == "escolha":
-        aula = _achar_aula(texto, [_aula(i) for i in d["lista"]])
-        if aula is None:
+        slot = _achar_slot(texto, [estado["slots"][k] for k in d["lista"]], agora)
+        if slot is None:
             return "Não identifiquei a reserva 😅 Toque numa opção.", d["botoes"]
-        faltam = _proxima_ocorrencia(aula, agora) - agora
-        if faltam < timedelta(hours=CANCELAR_ATE_HORAS):
+        if _dt(slot) - agora < timedelta(hours=CANCELAR_ATE_HORAS):
             _limpar_fluxo(estado)
-            return (f"A aula **{_rotulo_aula(aula)}** começa em menos de {CANCELAR_ATE_HORAS} h, "
+            return (f"A aula **{_rotulo(slot, agora)}** começa em menos de {CANCELAR_ATE_HORAS} h, "
                     f"então já não dá para cancelar por aqui. Fale com a recepção: "
                     f"{academia['recepcao_telefone']}."), []
-        d["aula"] = aula["id"]
+        d["escolhido"] = slot["key"]
         estado["etapa"] = "confirma"
-        return f"Confirma o cancelamento de **{_rotulo_aula(aula)}**?", ["Sim, cancelar", "Não"]
+        return f"Confirma o cancelamento de **{_rotulo(slot, agora)}**?", ["Sim, cancelar", "Não"]
     if etapa == "confirma":
         palavras = set(re.findall(r"\w+", texto))
         if palavras & {"nao", "desisto", "manter"}:
             _limpar_fluxo(estado)
             return "Ok, mantive sua reserva 👍", ["Menu"]
         if palavras & {"sim", "confirmo", "cancelar", "pode", "ok"}:
-            aula = _aula(d["aula"])
-            estado["reservas"][aula["id"]].remove(estado["aluno"])
-            if estado["aluno"] not in estado["reservas"][aula["id"]]:
-                _limpar_fluxo(estado)
-                return (f"Reserva em **{_rotulo_aula(aula)}** cancelada e vaga liberada ✅"), \
-                    ["Agendar aula", "Menu"]
+            slot = estado["slots"][d["escolhido"]]
+            estado["reservas"][slot["key"]].remove(estado["aluno"])
             _limpar_fluxo(estado)
-            return "Não consegui cancelar no sistema. Fale com a recepção.", []
+            return (f"Reserva em **{_rotulo(slot, agora)}** cancelada e vaga liberada ✅"), \
+                ["Agendar aula", "Menu"]
         return "Responda **sim** para cancelar ou **não** para manter.", ["Sim, cancelar", "Não"]
 
 
-def _iniciar_nivel(estado, depois=None, pre=None):
+def _duracao_meses(texto):
+    if "meio ano" in texto:
+        return 6
+    m = re.search(r"(\d+|" + "|".join(NUMEROS) + r")\s*(semanas?|meses|mes|anos?)\b", texto)
+    if not m:
+        return None
+    n = int(m.group(1)) if m.group(1).isdigit() else NUMEROS[m.group(1)]
+    meses = n * UNIDADES[m.group(2)]
+    if "menos de" in texto:
+        meses -= 0.5
+    return meses
+
+
+def _classificar(texto):
+    """Regra: parado há 6 meses ou mais (ou nunca treinou) = iniciante;
+    parado há menos de 6 meses = intermediário; treina regularmente =
+    intermediário (avançado se treina há 2 anos ou mais)."""
+    meses = _duracao_meses(texto)
+    parou = tem(texto, ["nao treino", "nao treinei", "nao pratico", "nao praticava", "parado", "parei"])
+    regular = (not parou) and tem(texto, ["regularmente", "nao parei", "sem parar", "continuo",
+                                          "ainda treino", "treino todo", "treino ha",
+                                          "treinando ha", "ja treino"])
+    if regular:
+        return "avancado" if meses is not None and meses >= 24 else "intermediario"
+    if meses is not None:
+        return "iniciante" if meses >= 6 else "intermediario"
+    if tem(texto, ["nunca", "jamais", "primeira vez", "nao treino", "nao pratico", "sedentar"]):
+        return "iniciante"
+    return None
+
+
+def _iniciar_nivel(estado, depois=None, pre=None, boas_vindas=False):
     estado["fluxo"] = "nivel"
     estado["etapa"] = "tempo"
     estado["dados"] = {"depois": depois, "pre": pre or {}}
     estado["perfil"] = {}
-    return "Há quanto tempo você pratica musculação?", rotulos(TEMPO)
-
-
-def _concluir_nivel(estado, agora):
-    p = estado["perfil"]
-    score = p["tempo"] + p["freq"]
-    if p["tempo"] == 0 or score <= 1:
-        nivel = "iniciante"
-    elif score <= 3:
-        nivel = "intermediario"
+    if boas_vindas:
+        intro = (f"Olá! Seja muito bem-vindo à {academia['nome']}! Meu nome é VitaAI e vou te "
+                 "acompanhar. Para eu montar a melhor rotina para você, me conta: ")
     else:
-        nivel = "avancado"
-    estado["nivel"] = nivel
-    estado["ultimo_treino"] = None
-    msg = f"Pronto! Classifiquei você como **{NOMES_NIVEL[nivel]}** 💪"
-    if p.get("lesao"):
-        msg += ("\n\nComo você tem lesão ou restrição, converse com o professor antes de treinar. "
-                f"Recepção: {academia['recepcao_telefone']}.")
-    depois, pre = estado["dados"].get("depois"), estado["dados"].get("pre", {})
-    _limpar_fluxo(estado)
-    if depois == "treino":
-        resp, ops = _iniciar_treino(estado, pre)
-        return msg + "\n\n" + resp, ops
-    return msg, ["Montar meu treino", "Aquecimento", "Agendar aula"]
+        intro = "Para montar o melhor treino para você, me conta: "
+    return intro + "há quanto tempo você não pratica atividades físicas regulares?", TEMPO_OPCOES
+
+
+FRASE_NIVEL = {
+    "iniciante": "Isso garante uma intensidade adequada para evitar lesões e promover adaptação gradual.",
+    "intermediario": "Isso garante um treino com intensidade adequada ao seu momento.",
+    "avancado": "Isso permite um treino com mais volume e intensidade, dentro do limite seguro.",
+}
 
 
 def _fluxo_nivel(texto, estado, agora):
-    p, etapa = estado["perfil"], estado["etapa"]
-    perguntas = {
-        "tempo": (TEMPO, "freq", "Quantas vezes por semana você consegue treinar?", FREQ, True),
-        "freq": (FREQ, "obj", "Qual é o seu objetivo principal?", OBJETIVO, False),
-        "obj": (OBJETIVO, "lesao", "Você tem alguma lesão ou restrição médica?", LESAO, True),
-    }
-    if etapa in perguntas:
-        atual, proxima, pergunta, prox_opcoes, _ = perguntas[etapa]
-        i = escolher(texto, atual, numerico=(etapa != "freq"))
-        if i is None:
-            return "Não entendi 😅 Escolha uma das opções:", rotulos(atual)
-        p[etapa] = i
-        estado["etapa"] = proxima
-        return pergunta, rotulos(prox_opcoes)
-    if etapa == "lesao":
-        i = escolher(texto, LESAO)
-        if i is None:
-            return "Não entendi 😅 Escolha uma das opções:", rotulos(LESAO)
-        p["lesao"] = i == 1
+    etapa = estado["etapa"]
+    if etapa == "tempo":
+        nivel = _classificar(texto)
+        if nivel is None:
+            return ("Não entendi 😅 Me conta há quanto tempo você não treina (por exemplo, "
+                    "\"8 meses\") ou escolha uma opção:"), TEMPO_OPCOES
+        estado["nivel"] = nivel  # RN02
+        estado["aquecido"] = False
+        estado["ultimo_treino"] = None
+        estado["etapa"] = "objetivo"
+        return (f"Perfeito! Com base na sua resposta, vamos te classificar como "
+                f"{NIVEL_MIN[nivel]} neste momento. {FRASE_NIVEL[nivel]} "
+                "Qual é o seu principal objetivo?"), OBJETIVO_OPCOES
+    if etapa == "objetivo":
+        estado["perfil"]["objetivo"] = texto
         return _concluir_nivel(estado, agora)
+
+
+def _concluir_nivel(estado, agora):
+    nivel = estado["nivel"]
+    depois, pre = estado["dados"].get("depois"), estado["dados"].get("pre", {})
+    msg = (f"Excelente! Seu nível {NIVEL_MIN[nivel]} e seus objetivos foram registrados no "
+           "sistema. Vamos passar para a escolha do seu treino!")
+    _limpar_fluxo(estado)
+    if depois == "treino":
+        r, o = _treino_visao(estado, pre)
+        return msg + "\n\n" + r, o
+    if depois == "aquecimento":
+        r, o = _iniciar_aquecimento(estado)
+        return msg + "\n\n" + r, o
+    if depois == "express":
+        r, o = _texto_expresso(estado, pre.get("foco"))
+        return msg + "\n\n" + r, o
+    return msg, ["Aquecimento", "Ver minha ficha de treino"]
+
+
+def _iniciar_aquecimento(estado):
+    if estado["nivel"] is None:
+        resp, ops = _iniciar_nivel(estado, depois="aquecimento")
+        return "Para indicar o aquecimento certo, preciso conhecer seu nível. " + resp, ops
+    nivel = estado["nivel"]
+    opcoes = AQUECIMENTO[nivel]
+    linhas = "\n".join(f"- **{o['nome']}:** {o['descricao']}" for o in opcoes)
+    estado["fluxo"] = "aquecimento"
+    estado["etapa"] = "escolha"
+    estado["dados"] = {}
+    return (f"O aquecimento é fundamental para preparar suas articulações e músculos! "
+            f"Para o seu nível {NIVEL_MIN[nivel]}, recomendo duas opções:\n\n{linhas}\n\n"
+            "Qual dessas modalidades você prefere fazer agora?"), [o["nome"] for o in opcoes]
+
+
+def _fluxo_aquecimento(texto, estado, agora):
+    opcoes = AQUECIMENTO[estado["nivel"]]
+    for o in opcoes:
+        if any(k in texto for k in o["keys"]):
+            estado["aquecido"] = True
+            _limpar_fluxo(estado)
+            return (f"Ótima escolha! {o['escolha']} Assim que terminar, me avise por aqui para "
+                    "passarmos ao treino principal!"), ["Terminei o aquecimento"]
+    return "Não entendi 😅 Qual você prefere?", [o["nome"] for o in opcoes]
+
+
+def _iniciar_treino(estado, pre):
+    if estado["nivel"] is None:
+        r, o = _iniciar_nivel(estado, depois="treino", pre=pre)
+        return "Antes de montar sua ficha, preciso conhecer seu nível. " + r, o
+    return _treino_visao(estado, pre)
+
+
+def _treino_visao(estado, pre):
+    foco = pre.get("foco")
+    foco = FOCO_PADRAO if foco is None else foco
+    t = TREINOS[FOCO_ID[foco]]
+    estado["ultimo_treino"] = (foco, False)
+    estado["ajuste"] = 0
+    estado["aguardando"] = "exercicios"
+    msg = (f"Muito bem! Hoje seu treino principal será focado {t['principal_frase']} e seu "
+           f"treino secundário trabalhará {t['sec_frase']}.")
+    outro = "Treino de superiores" if foco != 0 else "Treino de inferiores"
+    ops = ["Quais são os exercícios?", "Treino expresso (20 min)", outro]
+    if not estado["aquecido"]:
+        msg += ("\n\n💡 Antes de começar, não esqueça do aquecimento: ele ajuda a prevenir "
+                "lesões. Quer ver as opções?")
+        ops = ["Aquecimento"] + ops
+    return msg, ops
+
+
+def _series_atual(estado):
+    s = SERIES[estado["nivel"]]
+    return max(s["min"], min(s["max"], s["series"] + estado["ajuste"]))
+
+
+def _texto_lista_exercicios(estado):
+    foco, _ = estado["ultimo_treino"]
+    t = TREINOS[FOCO_ID[foco]]
+    nivel = estado["nivel"]
+    n = _series_atual(estado)
+
+    def fmt(ex, principal):
+        if nivel == "iniciante":
+            reps = ex["reps_inic"]
+        else:
+            reps = SERIES[nivel]["reps"] if principal else "12 a 15"
+        return f"{ex['nome']} ({n} séries de {reps} repetições)"
+
+    pri = _frase_lista([fmt(e, True) for e in t["principal"]])
+    sec = _frase_lista([fmt(e, False) for e in t["secundario"]])
+    nomes = _nomes_treino(estado)
+    return (f"**Treino Principal:** {pri}.\n\n**Treino Secundário:** {sec}.\n\n"
+            "Quer conferir a carga inicial sugerida ou a instrução de execução de algum deles?"), \
+        nomes + ["Não precisa"]
+
+
+def _nomes_treino(estado):
+    t = TREINOS[FOCO_ID[estado["ultimo_treino"][0]]]
+    return [e["nome"] for e in t["principal"] + t["secundario"]]
+
+
+def _detalhe_exercicio(estado, nome):
+    return (f"**{nome}**\n\n**Execução:** {EXECUCAO[nome]}\n\n"
+            "**Carga inicial sugerida:** comece leve, com um peso que permita completar todas as "
+            f"repetições com boa técnica. O instrutor da {academia['nome']} define o valor ideal "
+            "para você.\n\nQuer ver outro exercício?"), _nomes_treino(estado) + ["Não precisa"]
+
+
+def _ajustar_treino(texto, estado):
+    ut = estado["ultimo_treino"]
+    if ut is None:
+        return None
+    if ut[1]:
+        if "treino completo" in texto:
+            return _treino_visao(estado, {"foco": ut[0]})
+        return None
+    s = SERIES[estado["nivel"]]
+    mais = tem(texto, ["mais serie", "aumentar serie", "mais volume", "aumentar volume"])
+    menos = tem(texto, ["menos serie", "diminuir serie", "reduzir serie", "menos volume"])
+    if not (mais or menos):
+        return None
+    aviso = ""
+    if mais:
+        if s["series"] + estado["ajuste"] >= s["max"]:
+            aviso = (f"Esse já é o máximo recomendado para o nível {NOMES_NIVEL[estado['nivel']]} "
+                     f"({s['max']} séries) 😉\n\n")
+        else:
+            estado["ajuste"] += 1
+    else:
+        if s["series"] + estado["ajuste"] <= s["min"]:
+            aviso = (f"Esse já é o mínimo recomendado para o nível {NOMES_NIVEL[estado['nivel']]} "
+                     f"({s['min']} séries).\n\n")
+        else:
+            estado["ajuste"] -= 1
+    estado["aguardando"] = "detalhe"
+    r, o = _texto_lista_exercicios(estado)
+    return aviso + r, o
+
+
+def _soft(texto, palavras, estado):
+    """Respostas que dependem da última pergunta, sem travar o usuário num fluxo."""
+    ag = estado["aguardando"]
+    if not ag:
+        return None
+    if ag == "exercicios":
+        if (tem(texto, ["exercicio", "quais", "sim", "mostra", "lista", "pode"])
+                and "expresso" not in texto and not any(p in texto for p in CATEGORIAS)):
+            estado["aguardando"] = "detalhe"
+            return _texto_lista_exercicios(estado)
+        estado["aguardando"] = None
+        return None
+    if ag == "detalhe":
+        if tem(texto, ["mais serie", "menos serie", "expresso", "aquecimento"]):
+            return None
+        nomes = _nomes_treino(estado)
+        achou = [n for k, n in CHAVES_EXERCICIO.items() if k in texto and n in nomes]
+        if achou:
+            return _detalhe_exercicio(estado, achou[0])
+        if palavras & {"nao", "dispenso", "vou"} or tem(texto, ["ja sei", "nao precisa"]):
+            estado["aguardando"] = None
+            desc = SERIES[estado["nivel"]]["descanso"]
+            return (f"Perfeito! Lembre-se de descansar {desc} entre as séries. Bom treino!"), \
+                ["Agendar aula", "Menu"]
+        if tem(texto, ["carga", "instrucao", "execucao", "sim", "como"]):
+            return "De qual exercício você quer ver a carga e a execução?", nomes + ["Não precisa"]
+        estado["aguardando"] = None
+        return None
+    if ag == "expresso_ok":
+        estado["aguardando"] = None
+        if tem(texto, ["show", "exatamente", "otimo", "perfeito", "legal", "gostei", "top", "bora"]):
+            return ("Excelente! Esse treino em circuito vai manter seu metabolismo acelerado no "
+                    "tempo que você tem. Bom treino rápido!"), ["Agendar aula", "Menu"]
+        return None
+    return None
+
+
+def _texto_expresso(estado, foco=None):
+    if estado["nivel"] is None:
+        r, o = _iniciar_nivel(estado, depois="express", pre={"foco": foco})
+        return "Para adaptar a série ao seu nível, preciso te conhecer um pouco. " + r, o
+    nivel = estado["nivel"]
+    ex = EXPRESSO[nivel]
+    if foco is None:
+        foco = estado["ultimo_treino"][0] if estado["ultimo_treino"] else FOCO_PADRAO
+    estado["ultimo_treino"] = (foco, True)
+    estado["aguardando"] = "expresso_ok"
+    linhas = "\n".join(f"- Exercício {i}: {nome} ({series})."
+                       for i, (nome, series) in enumerate(ex["exercicios"], 1))
+    return ("Dá sim! Vou adaptar uma série expressa de alta eficiência para caber no seu tempo "
+            "disponível. Faremos um circuito contínuo:\n\n" + linhas +
+            f"\n\nO descanso entre os exercícios será de apenas {ex['descanso']}.\n\n"
+            "💡 Antes de começar, faça uns 3 minutos de aquecimento leve (esteira ou bicicleta) "
+            "para prevenir lesões."), ["Treino completo", "Agendar aula"]
 
 
 
 def _iniciar_serie(texto, estado):
     foco = escolher(texto, FOCO, numerico=False)
-    pre = {
-        "foco": 2 if foco is None else foco,  # "série de condicionamento" = corpo todo
-        "express": True if tem(texto, ["expresso", "rapid", "20 min", "pouco tempo"]) else None,
-    }
     estado["fluxo"] = "serie"
     estado["etapa"] = "aquecimento"
-    estado["dados"] = {"pre": pre}
+    estado["dados"] = {"pre": {"foco": 2 if foco is None else foco}}
     return "Posso ajudar! Você deseja começar com aquecimento?", ["Sim", "Não"]
 
 
 def _seguir_serie(estado, prefixo):
-    pre = estado["dados"]["pre"]
+    d = estado["dados"]
+    pre, aquecer = d["pre"], d["aquecer"]
+    estado["foco_pref"] = pre["foco"]
     nome = ALUNOS[estado["aluno"]]["nome"].split()[0]
-    resp, ops = _iniciar_treino(estado, pre)
+    if estado["nivel"] is None:
+        resp, ops = _iniciar_nivel(estado, depois="aquecimento" if aquecer else "treino", pre=pre)
+    elif aquecer:
+        resp, ops = _iniciar_aquecimento(estado)
+    else:
+        resp, ops = _treino_visao(estado, pre)
     return f"{prefixo}Cadastro validado, {nome}! ✅\n\n" + resp, ops
 
 
 def _fluxo_serie(texto, estado, agora):
     palavras = set(re.findall(r"\w+", texto))
+    d = estado["dados"]
     if estado["etapa"] == "aquecimento":
         if palavras & {"sim", "quero", "claro", "pode", "vamos", "ok"}:
-            prefixo = ""
+            d["aquecer"], prefixo = True, ""
         elif palavras & {"nao", "dispenso"}:
-            prefixo = ("Tudo bem! Mesmo assim vou deixar a sugestão no seu treino, "
-                       "porque aquecer previne lesões. ")
+            d["aquecer"] = False
+            prefixo = ("Tudo bem! Mesmo assim vou deixar a sugestão de aquecimento no seu treino, "
+                       "porque ele previne lesões. ")
         else:
             return "Responda **sim** ou **não**: você deseja começar com aquecimento?", ["Sim", "Não"]
         if estado["aluno"]:
             return _seguir_serie(estado, prefixo)
         estado["etapa"] = "id"
+        d["prefixo"] = prefixo
         return prefixo + "Informe seu número de matrícula para prosseguir.", []
     if estado["etapa"] == "id":
         ok, resp = _validar_id(texto, estado)
         return _seguir_serie(estado, "") if ok else resp
 
 
+def _faixa_dias(dias):
+    nomes = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
+    dias = sorted(dias)
+    if len(dias) > 2 and dias == list(range(dias[0], dias[-1] + 1)):
+        return f"{nomes[dias[0]]} a {nomes[dias[-1]]}"
+    return _frase_lista([nomes[d] for d in dias])
 
-def _iniciar_treino(estado, pre):
-    if estado["nivel"] is None:
-        resp, ops = _iniciar_nivel(estado, depois="treino", pre=pre)
-        return ("Para montar um treino seguro, preciso saber seu nível. "
-                "São 4 perguntinhas rápidas.\n\n" + resp), ops
-    estado["fluxo"] = "treino"
-    estado["dados"] = dict(pre)
-    return _treino_proximo(estado)
-
-
-def _treino_proximo(estado):
-    d = estado["dados"]
-    if d.get("foco") is None:
-        estado["etapa"] = "foco"
-        return "Qual região você quer treinar hoje?", rotulos(FOCO)
-    if d.get("express") is None:
-        estado["etapa"] = "duracao"
-        return "Quanto tempo você tem?", rotulos(DURACAO)
-    estado["ultimo_treino"] = (d["foco"], d["express"])
-    estado["ajuste"] = 0
-    _limpar_fluxo(estado)
-    return _texto_treino(estado)
-
-
-def _fluxo_treino(texto, estado, agora):
-    d, etapa = estado["dados"], estado["etapa"]
-    if etapa == "foco":
-        i = escolher(texto, FOCO)
-        if i is None:
-            return "Não entendi 😅 Escolha uma das opções:", rotulos(FOCO)
-        d["foco"] = i
-    elif etapa == "duracao":
-        i = escolher(texto, DURACAO)
-        if i is None:
-            return "Não entendi 😅 Escolha uma das opções:", rotulos(DURACAO)
-        d["express"] = i == 1
-    return _treino_proximo(estado)
-
-
-def _texto_treino(estado):
-    foco_i, express = estado["ultimo_treino"]
-    nivel = estado["nivel"]
-    t = TREINOS[FOCO_ID[foco_i]]
-    s = SERIES[nivel]
-    n = max(s["min"], min(s["max"], s["series"] + estado["ajuste"]))  # RN03
-    n2 = max(2, n - 1)
-
-    if express:
-        trabalho, descanso = EXPRESSO[nivel]
-        lista = "\n".join(f"- {e}" for e in t["principal"] + t["secundario"])
-        texto = (f"**Treino expresso — {t['nome']}** (nível {NOMES_NIVEL[nivel]})\n\n"
-                 "**1) Aquecimento (4 min)**\n\n"
-                 f"- Esteira ou bicicleta em ritmo leve (3 min)\n- {t['aquecimento']}\n\n"
-                 f"**2) Circuito (12 min)** — 2 voltas, {trabalho} s de trabalho e {descanso} s de descanso em cada exercício:\n\n"
-                 f"{lista}\n\n"
-                 "**3) Alongamento (4 min)**")
-    else:
-        aq = "\n".join(f"- {a}" for a in AQUECIMENTO[nivel])
-        pri = "\n".join(f"- {e}" for e in t["principal"])
-        sec = "\n".join(f"- {e}" for e in t["secundario"])
-        texto = (f"**Seu treino — {t['nome']}** (nível {NOMES_NIVEL[nivel]})\n\n"
-                 f"**1) Aquecimento** (escolha uma opção + o específico)\n\n{aq}\n- Específico: {t['aquecimento']}\n\n"
-                 f"**2) Treino principal** — {n} séries de {s['reps']} repetições, descanso {s['descanso']}\n\n{pri}\n\n"
-                 f"**3) Treino secundário** — {n2} séries de 12 a 15 repetições, descanso 45 a 60 s\n\n{sec}")
-    texto += ("\n\n⚠️ É uma sugestão geral. Peça a um instrutor da academia para ajustar cargas e técnica.")
-    if estado["perfil"].get("lesao"):
-        texto += "\n\nLembre de avisar o professor sobre sua lesão ou restrição."
-    ops = ["Mais séries", "Menos séries",
-           "Treino completo" if express else "Treino expresso (20 min)", "Agendar aula"]
-    if express:
-        ops = ops[2:3] + ops[3:]
-    return texto, ops
-
-
-def _ajustar_treino(texto, estado):
-    if estado["ultimo_treino"] is None:
-        return None
-    foco_i, express = estado["ultimo_treino"]
-    nivel = estado["nivel"]
-    s = SERIES[nivel]
-    if tem(texto, ["mais serie", "aumentar serie", "mais volume", "aumentar volume"]):
-        if s["series"] + estado["ajuste"] >= s["max"]:
-            r, o = _texto_treino(estado)
-            return (f"Esse já é o máximo recomendado para o nível {NOMES_NIVEL[nivel]} "
-                    f"({s['max']} séries) 😉\n\n" + r), o
-        estado["ajuste"] += 1
-        return _texto_treino(estado)
-    if tem(texto, ["menos serie", "diminuir serie", "reduzir serie", "menos volume"]):
-        if s["series"] + estado["ajuste"] <= s["min"]:
-            r, o = _texto_treino(estado)
-            return (f"Esse já é o mínimo recomendado para o nível {NOMES_NIVEL[nivel]} "
-                    f"({s['min']} séries).\n\n" + r), o
-        estado["ajuste"] -= 1
-        return _texto_treino(estado)
-    if escolher(texto, FOCO, numerico=False) is None:
-        if tem(texto, ["expresso", "rapid"]) and not express:
-            estado["ultimo_treino"] = (foco_i, True)
-            return _texto_treino(estado)
-        if "treino completo" in texto and express:
-            estado["ultimo_treino"] = (foco_i, False)
-            return _texto_treino(estado)
-    return None
-
-
-def _texto_aquecimento(estado):
-    nivel = estado["nivel"]
-    if nivel:
-        itens = "\n".join(f"- {a}" for a in AQUECIMENTO[nivel])
-        return (f"Aquecimento recomendado para o nível **{NOMES_NIVEL[nivel]}**:\n\n{itens}\n\n"
-                "Ele prepara músculos e articulações e ajuda a prevenir lesões 💪"), ["Montar meu treino"]
-    itens = "\n".join(f"- {a}" for a in AQUECIMENTO["iniciante"])
-    return ("Algumas opções de aquecimento:\n\n" + itens +
-            "\n\nSe me disser seu nível, eu adapto a recomendação."), ["Descobrir meu nível", "Montar meu treino"]
 
 def _lista_modalidades():
     mods = list(academia["modalidades"])
-    for a in AULAS:
-        if a["modalidade"] not in mods:
-            mods.append(a["modalidade"])
+    for g in GRADE:
+        if g["modalidade"] not in mods:
+            mods.append(g["modalidade"])
     return mods
 
 
@@ -591,21 +793,26 @@ def _contexto_ia():
             f"Recepção: {academia['recepcao_telefone']}.")
 
 
-def _info(texto, palavras, estado):
-    """Intents de consulta. Devolve (texto, opcoes) ou None."""
+def _info(texto, palavras, estado, agora):
     if tem(texto, ["vaga", "grade", "aulas coletivas", "horario das aulas", "quais aulas"]):
-        linhas = []
-        for a in AULAS:
-            v = _vagas(estado, a)
-            linhas.append(f"- {_rotulo_aula(a)} — {f'{v} vaga(s)' if v > 0 else 'lotada'}")
+        data = _parse_data(texto, agora)
+        if data:
+            slots = _slots_do_dia(estado, data, None, agora)
+            if not slots:
+                return f"Não temos aulas coletivas {_dia_rel(data, agora)}.", ["Agendar aula", "Menu"]
+            linhas = [f"- {s['modalidade']} às {s['hora']}: "
+                      f"{f'{_vagas(estado, s)} vaga(s)' if _vagas(estado, s) > 0 else 'lotada'}"
+                      for s in slots]
+            return f"Aulas {_dia_rel(data, agora)}:\n\n" + "\n".join(linhas), ["Agendar aula", "Menu"]
+        linhas = [f"- {g['modalidade']}: {_faixa_dias(g['dias'])}, às {_frase_lista(g['horas'])}"
+                  for g in GRADE]
         return "Grade de aulas coletivas:\n\n" + "\n".join(linhas), ["Agendar aula", "Menu"]
     if palavras & {"abre", "fecha", "abrem", "fecham", "aberto"} or tem(texto, ["horario", "funcionamento", "que horas"]):
         linhas = [f"- {dia}: {h}" for dia, h in academia["horarios"].items()]
         intro = variar("Nosso horário é este:", "Funcionamos assim:", "Olha só nossos horários:")
         return intro + "\n\n" + "\n".join(linhas) + "\n\nA VitaAI atende você 24 h por dia 💜", ["Agendar aula", "Menu"]
     if tem(texto, ["mensalidade", "plano", "valor", "preco"]):
-        extra = "\n\nLimite de reservas de aula: " + ", ".join(
-            f"{p}: {n}" for p, n in LIMITE_RESERVAS.items())
+        extra = "\n\nLimite de reservas de aula: " + ", ".join(f"{p}: {n}" for p, n in LIMITE_RESERVAS.items())
         return f"{academia['planos']}{extra}", ["Falar com a recepção", "Menu"]
     if tem(texto, ["modalidade", "aula", "servico", "spin", "funcional"]):
         intro = variar("Por aqui temos:", "Estas são nossas modalidades:")
@@ -619,6 +826,7 @@ def _info(texto, palavras, estado):
                 f"- Limite de reservas por plano ({', '.join(f'{p}: {n}' for p, n in LIMITE_RESERVAS.items())})\n"
                 f"- Cancelamento até {CANCELAR_ATE_HORAS} h antes da aula"), ["Agendar aula", "Menu"]
     return None
+
 
 
 def _exercicios_api(texto):
@@ -645,7 +853,7 @@ FLUXOS = {
     "agendar": _fluxo_agendar,
     "cancelar": _fluxo_cancelar,
     "nivel": _fluxo_nivel,
-    "treino": _fluxo_treino,
+    "aquecimento": _fluxo_aquecimento,
     "serie": _fluxo_serie,
 }
 
@@ -655,7 +863,6 @@ def responder(pergunta, estado, agora=None):
     texto = normalizar(pergunta)
     palavras = set(re.findall(r"\w+", texto))
 
- 
     if estado["fluxo"]:
         if tem(texto, ["recepcao", "atendente", "humano"]):
             _limpar_fluxo(estado)
@@ -688,6 +895,12 @@ def responder(pergunta, estado, agora=None):
 
 
 def _rotear(pergunta, texto, palavras, estado, agora):
+    
+    r = _soft(texto, palavras, estado)
+    if r:
+        return r
+
+   
     if len(palavras) <= 4:
         if palavras & {"oi", "ola", "opa", "eae", "hey"} or tem(texto, ["bom dia", "boa tarde", "boa noite"]):
             return variar(
@@ -695,11 +908,11 @@ def _rotear(pergunta, texto, palavras, estado, agora):
                 "Olá! Que bom ter você aqui! Sobre o que quer saber?",
             ), MENU_OPCOES
         if tem(texto, ["obrigad", "valeu", "brigad"]):
-            return variar("Por nada! 💜", "Sempre que precisar, é só chamar!", "Disponha! Bons treinos 💪"), []
+            return f"Por nada! Tenha um ótimo dia e nos vemos na {academia['nome']}!", []
         if palavras & {"menu", "ajuda"} or tem(texto, ["o que voce faz", "o que voce pode"]):
             return _menu()
 
-  
+   
     if tem(texto, ["recepcao", "atendente", "humano", "falar com", "professor", "telefone"]):
         return _recepcao()
 
@@ -708,39 +921,46 @@ def _rotear(pergunta, texto, palavras, estado, agora):
     if r:
         return r
 
-  
+   
+    if tem(texto, EXPRESSO_PALAVRAS):
+        i = escolher(texto, FOCO, numerico=False)
+        return _texto_expresso(estado, i)
+
+    
     if tem(texto, ["minhas reserva", "minha reserva", "meus agendamentos", "ver reserva"]):
-        return _iniciar_cancelar(estado, so_ver=True)
+        return _iniciar_cancelar(estado, agora, so_ver=True)
     if tem(texto, ["cancel", "desmarcar"]):
-        return _iniciar_cancelar(estado)
+        return _iniciar_cancelar(estado, agora)
     if tem(texto, ["agend", "marcar", "reservar", "inscrever"]):
-        return _iniciar_agendar(texto, estado)
+        return _iniciar_agendar(texto, estado, agora)
 
    
     if "serie" in texto and not palavras & {"mais", "menos", "aumentar", "diminuir", "reduzir"}:
         return _iniciar_serie(texto, estado)
 
     
-    if tem(texto, ["nivel", "classific", "avaliacao", "avaliar"]):
-        if estado["nivel"] and not tem(texto, ["refaz", "novamente", "reclass", "de novo", "avaliacao"]):
+    if tem(texto, ["nivel", "classific", "avaliacao", "avaliar", "comecar a treinar",
+                   "por fora", "primeira vez", "nunca treinei"]):
+        if estado["nivel"] and tem(texto, ["nivel"]) and not tem(texto, ["refaz", "novamente", "reclass", "de novo"]):
             return (f"Seu nível atual é **{NOMES_NIVEL[estado['nivel']]}**.",
                     ["Refazer avaliação", "Montar meu treino"])
-        return _iniciar_nivel(estado)
-    if tem(texto, ["descobrir meu nivel"]):
-        return _iniciar_nivel(estado)
+        return _iniciar_nivel(estado, boas_vindas=True)
 
   
     if tem(texto, ["aquecimento", "aquecer"]):
-        return _texto_aquecimento(estado)
-    if tem(texto, ["treino", "ficha", "malhar", "treinar"]):
-        pre = {}
-        i = escolher(texto, FOCO, numerico=False)
-        pre["foco"] = i
-        pre["express"] = (True if tem(texto, ["expresso", "rapid", "20 min", "pouco tempo"]) else None)
-        return _iniciar_treino(estado, pre)
+        return _iniciar_aquecimento(estado)
 
-  
-    r = _info(texto, palavras, estado)
+   
+    if tem(texto, ["treino", "ficha", "malhar", "treinar", "terminei"]):
+        if "terminei" in texto:
+            estado["aquecido"] = True
+        i = escolher(texto, FOCO, numerico=False)
+        if i is not None:
+            estado["foco_pref"] = i
+        return _iniciar_treino(estado, {"foco": estado["foco_pref"]})
+
+   
+    r = _info(texto, palavras, estado, agora)
     if r:
         return r
 
