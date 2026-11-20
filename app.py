@@ -7,9 +7,8 @@ from fluxos import responder, novo_estado, mascarar, MENU_OPCOES
 from base_dados import ALUNOS
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
-# RNF05: coloque a imagem da persona (gerada por IA) em AssAcad/vitaai.png
-IMG_PERSONA = os.path.join(PASTA, "vitaai.png")        
-IMG_CORPO = os.path.join(PASTA, "vitaai_corpo.png")  
+IMG_PERSONA = os.path.join(PASTA, "vitaai.png")          
+IMG_CORPO = os.path.join(PASTA, "vitaai_corpo.png")     
 AVATARES = {
     "user": "🧑",
     "assistant": IMG_PERSONA if os.path.exists(IMG_PERSONA) else "💚",
@@ -51,7 +50,6 @@ def reiniciar():
 if "estado" not in st.session_state:
     reiniciar()
 
-# ---------------------------------------------------------------- barra lateral
 with st.sidebar:
     if os.path.exists(IMG_CORPO):
         st.image(IMG_CORPO, use_container_width=True)
@@ -66,11 +64,13 @@ with st.sidebar:
         for mat, a in ALUNOS.items():
             situacao = "ativo" if a["ativo"] else "inativo"
             st.write(f"Matrícula **{mat}** · CPF {a['cpf']} · {a['plano']} · {situacao}")
+    if st.button("🏠 Voltar ao menu"):
+        st.session_state.clique = "Voltar ao menu"
+        st.rerun()
     if st.button("🗑️ Reiniciar conversa"):
         reiniciar()
         st.rerun()
 
-# ---------------------------------------------------------------- processamento
 clique = st.session_state.pop("clique", None)
 entrada = st.chat_input("Como posso ajudar você?")
 pergunta = clique or entrada
@@ -83,7 +83,6 @@ if pergunta:
         {"role": "assistant", "content": texto, "opcoes": opcoes}
     )
 
-# ---------------------------------------------------------------- exibição
 for msg in st.session_state.historico:
     with st.chat_message(msg["role"], avatar=AVATARES[msg["role"]]):
         st.write(msg["content"])
