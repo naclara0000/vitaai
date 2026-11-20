@@ -18,7 +18,7 @@ from api_exercicios import buscar_exercicios
 
 try:
     from ia import conversar_ia
-except Exception: 
+except Exception:  
     conversar_ia = None
 
 MENU_OPCOES = [
@@ -47,7 +47,7 @@ FOCO = [
     ("Corpo todo", ["corpo todo", "full body", "geral"]),
 ]
 FOCO_ID = ["superiores", "inferiores", "corpo_todo"]
-FOCO_PADRAO = 1
+FOCO_PADRAO = 1  # inferiores (igual ao Fluxo 3 do documento)
 
 TEMPO_OPCOES = ["Nunca treinei", "Mais de 6 meses parado", "Menos de 6 meses parado", "Treino regularmente"]
 OBJETIVO_OPCOES = ["Ganhar massa", "Emagrecer", "Melhorar o fôlego", "Saúde e bem-estar"]
@@ -369,7 +369,6 @@ def _confirmar_reserva(estado, agora, validou_agora):
             return msg, ["Cancelar uma reserva", "Menu"]
         return _mostrar_slots(estado, agora, prefixo=msg + "\n\nEscolha outro horário.\n\n")
     estado["reservas"][slot["key"]].append(estado["aluno"])
-    # RN07: só confirma quando o registro aparece no sistema
     if estado["aluno"] in estado["reservas"][slot["key"]]:
         _limpar_fluxo(estado)
         protocolo = (f"VIT-{slot['modalidade'][:3].upper()}-{slot['data']:%d%m}-"
@@ -575,6 +574,7 @@ def _fluxo_aquecimento(texto, estado, agora):
     return "Não entendi 😅 Qual você prefere?", [o["nome"] for o in opcoes]
 
 
+# ---------------------------------------------------------------- Fluxo 3: treino
 def _iniciar_treino(estado, pre):
     if estado["nivel"] is None:
         r, o = _iniciar_nivel(estado, depois="treino", pre=pre)
@@ -725,7 +725,6 @@ def _texto_expresso(estado, foco=None):
             "para prevenir lesões."), ["Treino completo", "Agendar aula"]
 
 
-
 def _iniciar_serie(texto, estado):
     foco = escolher(texto, FOCO, numerico=False)
     estado["fluxo"] = "serie"
@@ -828,7 +827,6 @@ def _info(texto, palavras, estado, agora):
     return None
 
 
-
 def _exercicios_api(texto):
     categorias = []
     for palavra, ids in CATEGORIAS.items():
@@ -848,7 +846,6 @@ def _exercicios_api(texto):
             "\n\nPeça a um instrutor para ajustar séries e cargas 💪"), ["Montar meu treino", "Menu"]
 
 
-
 FLUXOS = {
     "agendar": _fluxo_agendar,
     "cancelar": _fluxo_cancelar,
@@ -858,10 +855,34 @@ FLUXOS = {
 }
 
 
+def _com_menu(resp):
+    """Garante o botão 'Voltar ao menu' em todas as respostas (exceto no próprio menu)."""
+    texto, ops = resp
+    ops = ["Voltar ao menu" if o == "Menu" else o for o in ops]
+    if ops != MENU_OPCOES and "Voltar ao menu" not in ops:
+        ops = ops + ["Voltar ao menu"]
+    return texto, ops
+
+
 def responder(pergunta, estado, agora=None):
+    return _com_menu(_responder(pergunta, estado, agora))
+
+
+def _responder(pergunta, estado, agora=None):
     agora = agora or datetime.now()
     texto = normalizar(pergunta)
     palavras = set(re.findall(r"\w+", texto))
+
+    if "menu" in palavras:
+        _limpar_fluxo(estado)
+        estado["aguardando"] = None
+        return _menu()
+
+    if estado["fluxo"] == "aquecimento":
+        chaves = [k for o in AQUECIMENTO[estado["nivel"]] for k in o["keys"]]
+        if not tem(texto, chaves) and tem(texto, ["treino", "ficha", "terminei", "agend", "horario",
+                                                    "plano", "exercicio", "nivel", "expresso"]):
+            _limpar_fluxo(estado)
 
     if estado["fluxo"]:
         if tem(texto, ["recepcao", "atendente", "humano"]):
@@ -878,7 +899,6 @@ def responder(pergunta, estado, agora=None):
         estado["falhas"] = 0
         return resp
 
-   
     estado["falhas"] += 1
     if conversar_ia:
         r = conversar_ia(pergunta, _contexto_ia())
@@ -895,12 +915,10 @@ def responder(pergunta, estado, agora=None):
 
 
 def _rotear(pergunta, texto, palavras, estado, agora):
-    
     r = _soft(texto, palavras, estado)
     if r:
         return r
 
-   
     if len(palavras) <= 4:
         if palavras & {"oi", "ola", "opa", "eae", "hey"} or tem(texto, ["bom dia", "boa tarde", "boa noite"]):
             return variar(
@@ -912,21 +930,17 @@ def _rotear(pergunta, texto, palavras, estado, agora):
         if palavras & {"menu", "ajuda"} or tem(texto, ["o que voce faz", "o que voce pode"]):
             return _menu()
 
-   
     if tem(texto, ["recepcao", "atendente", "humano", "falar com", "professor", "telefone"]):
         return _recepcao()
 
- 
     r = _ajustar_treino(texto, estado)
     if r:
         return r
 
-   
     if tem(texto, EXPRESSO_PALAVRAS):
         i = escolher(texto, FOCO, numerico=False)
         return _texto_expresso(estado, i)
 
-    
     if tem(texto, ["minhas reserva", "minha reserva", "meus agendamentos", "ver reserva"]):
         return _iniciar_cancelar(estado, agora, so_ver=True)
     if tem(texto, ["cancel", "desmarcar"]):
@@ -934,11 +948,9 @@ def _rotear(pergunta, texto, palavras, estado, agora):
     if tem(texto, ["agend", "marcar", "reservar", "inscrever"]):
         return _iniciar_agendar(texto, estado, agora)
 
-   
     if "serie" in texto and not palavras & {"mais", "menos", "aumentar", "diminuir", "reduzir"}:
         return _iniciar_serie(texto, estado)
 
-    
     if tem(texto, ["nivel", "classific", "avaliacao", "avaliar", "comecar a treinar",
                    "por fora", "primeira vez", "nunca treinei"]):
         if estado["nivel"] and tem(texto, ["nivel"]) and not tem(texto, ["refaz", "novamente", "reclass", "de novo"]):
@@ -946,11 +958,13 @@ def _rotear(pergunta, texto, palavras, estado, agora):
                     ["Refazer avaliação", "Montar meu treino"])
         return _iniciar_nivel(estado, boas_vindas=True)
 
-  
+    if "terminei" in texto:
+        estado["aquecido"] = True
+        return _iniciar_treino(estado, {"foco": estado["foco_pref"]})
+
     if tem(texto, ["aquecimento", "aquecer"]):
         return _iniciar_aquecimento(estado)
 
-   
     if tem(texto, ["treino", "ficha", "malhar", "treinar", "terminei"]):
         if "terminei" in texto:
             estado["aquecido"] = True
@@ -959,12 +973,11 @@ def _rotear(pergunta, texto, palavras, estado, agora):
             estado["foco_pref"] = i
         return _iniciar_treino(estado, {"foco": estado["foco_pref"]})
 
-   
     r = _info(texto, palavras, estado, agora)
     if r:
         return r
 
-   
+    # 11. Exercícios pela API
     if "exercicio" in texto or any(p in texto for p in CATEGORIAS):
         return _exercicios_api(texto)
 
